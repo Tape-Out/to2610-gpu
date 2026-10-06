@@ -1,0 +1,86 @@
+name: to2610-gpu
+version: 0.1.0
+spec: '0.1'
+kind: ip
+lang: verilog
+identity:
+  slug: to2610-gpu
+  display_name: tiny-gpu compute chip
+  summary: 'A small parallel-compute chip for the ECOS 2610 shuttle: tiny-gpu with four cores of four threads and its program and data memories on chip, loaded and started by a host over SPI.'
+  category: soc
+  subcategories:
+  - gpu
+  ip_family: tiny-gpu
+  integration_profile: []
+  maturity: simulated
+contract:
+  version: 1
+  ctrl:
+    shape: none
+    aw: 32
+    dw: 32
+deps:
+  tiny-gpu: ^0.1
+emit:
+- kind: foreign
+  lang: verilog
+  top: tgpu_soc
+  # 源码树是拼出来的：tiny-gpu 过 sv2v，加本仓的管理口与两块存储
+  setup: src
+  rtl:
+  - build/src/gpu.v
+  - hwsrc/spi_regs.v
+  - hwsrc/tgpu_soc.v
+  clock:
+    port: clk
+  reset:
+    port: rst_n
+    active: low
+    sync: false
+  ports:
+  - endpoint: mgmt
+    kind: physical
+    type: SpiSlavePins
+    map:
+      sck: sck
+      csN: cs_n
+      mosi: mosi
+      miso: miso
+      misoOe: miso_oe
+  - endpoint: status
+    kind: physical
+    type: TgpuStatus
+    map:
+      done: done
+      busy: busy
+  limits:
+  - 四个核、每块四个线程是写死的；线程数要是 4 的整数倍，上游在最后一块装不满时不结束
+  - 程序 256 条、数据 256 字节、寄存器与数据都是 8 位，是 tiny-gpu 指令集的上限
+  - 上游的比较只分得出相等与不等，BRn 实际是「不等则跳」；除以 0 的结果不定
+  - 没有处理器，内核与数据由片外主机经 SPI 装入
+asic:
+  top: to2610_gpu
+  frame: mpc
+  mhz: 50
+  flow: syn_sta
+  # 管理口钉在与 to2610-switch、to2610-router 相同的位上，三颗共用一种管理排线
+  pads:
+  - { port: sck, at: 56 }
+  - cs_n
+  - mosi
+  - { out: miso, oe: miso_oe }
+  - done
+  - busy
+tasks:
+  src:
+    desc: 拼源码树：tiny-gpu 的源码过 sv2v
+    run: bash htest/setup.sh {{dep.tiny-gpu}}
+  chip:
+    desc: 出流片的 .v，再在它上面跑整片测试
+    run: bash htest/chip.sh {{out}}
+test:
+  upstream:
+  - { name: chip, task: chip, timeout: 3600 }
+targets:
+  foreign:
+    driver: foreign

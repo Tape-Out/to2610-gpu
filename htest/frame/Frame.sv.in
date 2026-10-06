@@ -1,0 +1,165 @@
+// Frame 集成测试：信号经过外部的 user_io、FrameTop 到这一颗设计。
+// 复位期间在 user_io[6:0] 上给设计编号；放开后与单元测试做同一件事：经 SPI 读标识、写进一段内核、起跑、
+// 在 done 脚上等结束、读回四个字节。设计的 io_*[n] 对外是 user_io[n + 7]。
+
+module @FRAME_TOP@;
+
+`ifndef FRAME_TEST_DESIGN_ID
+  initial $error("FRAME_TEST_DESIGN_ID must be provided by the build tool");
+`endif
+
+  localparam int IO_WIDTH = 73;
+  localparam int DESIGN_ID_WIDTH = 7;
+  localparam logic [DESIGN_ID_WIDTH-1:0] DESIGN_ID = `FRAME_TEST_DESIGN_ID;
+  localparam time HALF_PERIOD = 10ns;
+
+  // payload 位次加上设计编号占的 7 位
+  localparam int SCK = DESIGN_ID_WIDTH + 56;
+  localparam int CS_N = DESIGN_ID_WIDTH + 57;
+  localparam int MOSI = DESIGN_ID_WIDTH + 58;
+  localparam int MISO = DESIGN_ID_WIDTH + 59;
+  localparam int DONE = DESIGN_ID_WIDTH + 60;
+  localparam int BUSY = DESIGN_ID_WIDTH + 61;
+
+  localparam logic [31:0] BASE = 32'h1000_0000;
+  localparam int TIMEOUT_CYCLES = 60_000;
+
+  // i = blockIdx * blockDim + threadIdx；mem[i] = i + 5
+  localparam int KERNEL_WORDS = 6;
+  localparam logic [15:0] KERNEL [KERNEL_WORDS] = '{
+    16'h50de,   // MUL R0, %blockIdx, %blockDim
+    16'h300f,   // ADD R0, R0, %threadIdx
+    16'h9105,   // CONST R1, #5
+    16'h3110,   // ADD R1, R1, R0
+    16'h8001,   // STR R0, R1
+    16'hf000    // RET
+  };
+
+  // 构建工具按 reset、test_io_oe 与 dut 这三个名字接争用检查，不要改名
+  logic clock = 1'b0;
+  logic reset = 1'b1;
+  logic [IO_WIDTH-1:0] test_io_out = '0;
+  logic [IO_WIDTH-1:0] test_io_oe = '0;
+  tri [IO_WIDTH-1:0] user_io;
+
+  always #(HALF_PERIOD) clock = ~clock;
+
+  for (genvar io_index = 0; io_index < IO_WIDTH; io_index++) begin : gen_test_io
+    assign user_io[io_index] = test_io_oe[io_index]
+      ? test_io_out[io_index]
+      : 1'bz;
+  end
+
+  FrameTop dut (
+    .clock(clock), .reset(reset), .user_io(user_io)
+  );
+
+  // SPI 模式 0，高位先出。SCK 周期 12 拍，慢于上限（主频的八分之一）。从口在 SCK 下降沿之后换位，主机在上升沿采
+  task automatic spi_byte(input logic [7:0] tx, output logic [7:0] rx);
+    for (int i = 7; i >= 0; i--) begin
+      test_io_out[MOSI] = tx[i];
+      repeat (6) @(negedge clock);
+      test_io_out[SCK] = 1'b1;
+      @(posedge clock);
+      if (user_io[MISO] === 1'bz) $fatal(1, "MISO is not driven while CS_N is low");
+      rx[i] = user_io[MISO];
+      repeat (6) @(negedge clock);
+      test_io_out[SCK] = 1'b0;
+    end
+  endtask
+
+  task automatic spi_word(input logic [31:0] tx, output logic [31:0] rx);
+    logic [7:0] b;
+    for (int k = 3; k >= 0; k--) begin
+      spi_byte(tx[8*k +: 8], b);
+      rx[8*k +: 8] = b;
+    end
+  endtask
+
+  task automatic spi_begin();
+    test_io_out[CS_N] = 1'b0;
+    repeat (8) @(negedge clock);
+  endtask
+
+  task automatic spi_end();
+    repeat (8) @(negedge clock);
+    test_io_out[CS_N] = 1'b1;
+    repeat (24) @(negedge clock);
+  endtask
+
+  task automatic bus_write(input logic [31:0] addr, input logic [31:0] data);
+    logic [7:0] b;
+    logic [31:0] w;
+    spi_begin();
+    spi_byte(8'h02, b);
+    spi_word(addr, w);
+    spi_word(data, w);
+    spi_end();
+  endtask
+
+  task automatic bus_read(input logic [31:0] addr, output logic [31:0] data);
+    logic [7:0] b;
+    logic [31:0] w;
+    spi_begin();
+    spi_byte(8'h03, b);
+    spi_word(addr, w);
+    spi_byte(8'h00, b);
+    spi_word(32'd0, data);
+    spi_end();
+  endtask
+
+  initial begin
+    repeat (TIMEOUT_CYCLES) @(posedge clock);
+    $fatal(1, "not finished after %0d cycles", TIMEOUT_CYCLES);
+  end
+
+  initial begin
+    logic [7:0] b;
+    logic [31:0] w;
+
+    // 复位期间给设计编号。设计的三根输入脚由测试台驱动，CS_N 空闲为高
+    test_io_oe[DESIGN_ID_WIDTH-1:0] = '1;
+    test_io_out[DESIGN_ID_WIDTH-1:0] = DESIGN_ID;
+    test_io_oe[SCK] = 1'b1;
+    test_io_oe[CS_N] = 1'b1;
+    test_io_oe[MOSI] = 1'b1;
+    test_io_out[CS_N] = 1'b1;
+    repeat (20) @(posedge clock);
+    @(negedge clock);
+    reset = 1'b0;
+    repeat (4) @(posedge clock);
+    #1ns;
+
+    if (!dut.selection_valid || !dut.design_selected[DESIGN_ID])
+      $fatal(1, "the design was not selected through FrameTop");
+
+    // done 与 busy 有人驱动，busy 为低；MISO 要等 CS_N 拉低，这时是高阻
+    if (user_io[DONE] === 1'bz || user_io[BUSY] !== 1'b0) $fatal(1, "done or busy is wrong after reset");
+    if (user_io[MISO] !== 1'bz) $fatal(1, "MISO is driven while CS_N is high");
+
+    spi_begin();
+    spi_byte(8'h9f, b);
+    spi_word(32'd0, w);
+    spi_end();
+    if (w !== 32'h5350_4953) $fatal(1, "identify read %h, expected 53504953", w);
+    bus_read(BASE + 32'h010, w);
+    if (w !== 32'h5447_5055) $fatal(1, "chip ID reads %h, expected 54475055", w);
+
+    for (int i = 0; i < KERNEL_WORDS; i++) bus_write(BASE + 32'h400 + 32'(4 * i), {16'd0, KERNEL[i]});
+    bus_write(BASE + 32'h004, 32'd4);
+    bus_write(BASE, 32'd1);
+    while (user_io[DONE] !== 1'b1) @(posedge clock);
+    if (user_io[BUSY] !== 1'b0) $fatal(1, "busy is still high when done rises");
+
+    for (int i = 0; i < 4; i++) begin
+      bus_read(BASE + 32'h800 + 32'(4 * i), w);
+      if (w !== 32'(i + 5)) $fatal(1, "thread %0d stored %0d, expected %0d", i, w, i + 5);
+    end
+    bus_read(BASE + 32'h00c, w);
+    if (w == 32'd0) $fatal(1, "the cycle counter did not run");
+
+    $display("@FRAME_TOP@ PASS: selected through FrameTop, loaded a kernel over SPI, four threads ran it");
+    $finish;
+  end
+
+endmodule
