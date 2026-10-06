@@ -160,3 +160,85 @@ async def one_block(dut):
     want = [(3 * a + b) & 0xFF for a, b in zip(k.data[:4], k.data[16:20])] + k.data[20:32]
     assert got[16:32] == want, got[16:32]
     assert got == G.emulate(k)
+
+
+# 上游 test/test_matadd.py 与 test/test_matmul.py 里的程序与数据，机器码逐字照搬：
+# 封装之后，上游自己的两个测试也要在这颗片上过
+UP_MATADD = G.Kernel(
+    [
+        0b0101000011011110,  # MUL R0, %blockIdx, %blockDim
+        0b0011000000001111,  # ADD R0, R0, %threadIdx
+        0b1001000100000000,  # CONST R1, #0
+        0b1001001000001000,  # CONST R2, #8
+        0b1001001100010000,  # CONST R3, #16
+        0b0011010000010000,  # ADD R4, R1, R0
+        0b0111010001000000,  # LDR R4, R4
+        0b0011010100100000,  # ADD R5, R2, R0
+        0b0111010101010000,  # LDR R5, R5
+        0b0011011001000101,  # ADD R6, R4, R5
+        0b0011011100110000,  # ADD R7, R3, R0
+        0b1000000001110110,  # STR R7, R6
+        0b1111000000000000,  # RET
+    ],
+    [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7],
+    8,
+)
+UP_MATMUL = G.Kernel(
+    [
+        0b0101000011011110,  # MUL R0, %blockIdx, %blockDim
+        0b0011000000001111,  # ADD R0, R0, %threadIdx
+        0b1001000100000001,  # CONST R1, #1
+        0b1001001000000010,  # CONST R2, #2
+        0b1001001100000000,  # CONST R3, #0
+        0b1001010000000100,  # CONST R4, #4
+        0b1001010100001000,  # CONST R5, #8
+        0b0110011000000010,  # DIV R6, R0, R2
+        0b0101011101100010,  # MUL R7, R6, R2
+        0b0100011100000111,  # SUB R7, R0, R7
+        0b1001100000000000,  # CONST R8, #0
+        0b1001100100000000,  # CONST R9, #0
+        0b0101101001100010,  # LOOP: MUL R10, R6, R2
+        0b0011101010101001,  # ADD R10, R10, R9
+        0b0011101010100011,  # ADD R10, R10, R3
+        0b0111101010100000,  # LDR R10, R10
+        0b0101101110010010,  # MUL R11, R9, R2
+        0b0011101110110111,  # ADD R11, R11, R7
+        0b0011101110110100,  # ADD R11, R11, R4
+        0b0111101110110000,  # LDR R11, R11
+        0b0101110010101011,  # MUL R12, R10, R11
+        0b0011100010001100,  # ADD R8, R8, R12
+        0b0011100110010001,  # ADD R9, R9, R1
+        0b0010000010010010,  # CMP R9, R2
+        0b0001100000001100,  # BRn LOOP
+        0b0011100101010000,  # ADD R9, R5, R0
+        0b1000000010011000,  # STR R9, R8
+        0b1111000000000000,  # RET
+    ],
+    [1, 2, 3, 4, 1, 2, 3, 4],
+    4,
+)
+
+
+@cocotb.test()
+async def upstream_matadd(dut):
+    """上游的矩阵加法测试：八个线程各加一对数，判据照上游的写法。"""
+    c, spi = await up(dut)
+    k = UP_MATADD
+    got, n = await run(c, spi, k)
+    assert got[16:24] == [a + b for a, b in zip(k.data[0:8], k.data[8:16])], got[16:24]
+    assert got == G.emulate(k)
+    dut._log.info("上游 matadd：八个线程 %d 拍", n)
+
+
+@cocotb.test()
+async def upstream_matmul(dut):
+    """上游的矩阵乘法测试：2 × 2，四个线程各算一个元素，判据照上游的写法。"""
+    c, spi = await up(dut)
+    k = UP_MATMUL
+    got, n = await run(c, spi, k)
+    a, b = k.data[0:4], k.data[4:8]
+    want = [sum(a[2 * (i // 2) + j] * b[2 * j + i % 2] for j in range(2)) for i in range(4)]
+    assert want == [7, 10, 15, 22]
+    assert got[8:12] == want, got[8:12]
+    assert got == G.emulate(k)
+    dut._log.info("上游 matmul：四个线程 %d 拍", n)
