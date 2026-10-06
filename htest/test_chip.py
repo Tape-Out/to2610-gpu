@@ -129,6 +129,28 @@ async def shade(dut):
 
 
 @cocotb.test()
+async def mlp(dut):
+    """批量推理：两层感知机判 2 × 2 图样里亮点个数的奇偶，十六种图样一个线程一种，权在数据存储里。"""
+    c, spi = await up(dut)
+    k = kernel("mlp")
+    x, w1, b1, w2 = k.data[:64], k.data[64:80], k.data[80:84], k.data[84:88]
+
+    def relu(v: int) -> int:
+        v &= 0xFF
+        return 0 if v >= 128 else v
+
+    want = []
+    for i in range(16):
+        h = [relu(b1[j] + sum(w1[4 * j + q] * x[4 * i + q] for q in range(4))) for j in range(4)]
+        want.append(sum(a * b for a, b in zip(w2, h)) & 0xFF)
+    assert want == [bin(i).count("1") & 1 for i in range(16)], "这组权算的不是奇偶"
+    got, n = await run(c, spi, k)
+    assert got[96:112] == want, got[96:112]
+    assert got == G.emulate(k)
+    dut._log.info("mlp：十六个线程 %d 拍", n)
+
+
+@cocotb.test()
 async def one_block(dut):
     """线程数只够一个块：只有一个核在跑，别的核不该动数据存储。"""
     c, spi = await up(dut)

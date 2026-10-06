@@ -4,7 +4,7 @@ A small parallel-compute chip for the ECOS 2610 shuttle: [tiny-gpu](https://gith
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
-Sixteen threads run the same kernel at once, each finding its own data from its thread number: the computing model of a GPU at its smallest. There is no processor on the chip. A host writes the kernel and the data through an SPI port that speaks the protocol of [`spis`](https://github.com/Tape-Out/spis), starts it, waits for the `done` pin and reads the data memory back.
+Sixteen threads run the same kernel at once, each finding its own data from its thread number: the computing model of a GPU at its smallest. The same hardware shades an image, one pixel a thread, and runs a small neural network over a batch, one sample a thread. There is no processor on the chip. A host writes the kernel and the data through an SPI port that speaks the protocol of [`spis`](https://github.com/Tape-Out/spis), starts it, waits for the `done` pin and reads the data memory back.
 
 tiny-gpu is taken unmodified through sv2v, as upstream builds it, and four inputs that upstream leaves unconnected on the program memory controller are tied to zero in the converted file (`htest/tieoff.py`). This repository adds the two memories and the management port in `hwsrc/`.
 
@@ -25,6 +25,7 @@ $ python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 run sw/kernels/shade.asm --show 8
 | `saxpy.asm` | 16 | y = 3x + y |
 | `matmul.asm` | 16 | a 4 × 4 matrix product, one element a thread, with a loop |
 | `shade.asm` | 64 | an 8 × 8 greyscale image, one pixel a thread |
+| `mlp.asm` | 16 | batch inference: a 4-4-1 perceptron with ReLU tells the parity of a 2 × 2 pattern, one pattern a thread, weights in the data memory |
 
 One thing the model has to copy: the comparison upstream implements only tells equal from unequal, so `BRn` branches when the operands differ.
 
