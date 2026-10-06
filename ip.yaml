@@ -63,6 +63,8 @@ asic:
   frame: mpc
   mhz: 50
   flow: syn_sta
+  # 两块触发器存储各被四路读口选，默认的 0.4 下详细布线不收敛（违例降到一万二又涨回两万二）；放宽给走线腾地方
+  util: 0.25
   # 管理口钉在与 to2610-switch、to2610-router 相同的位上，三颗共用一种管理排线
   pads:
   - { port: sck, at: 56 }
