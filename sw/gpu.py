@@ -12,6 +12,7 @@
 import argparse
 import pathlib
 import re
+import struct
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -162,6 +163,12 @@ def memory(n: int = 256):
     return [x & 0xFF for x in w]
 
 
+def tgk(k: Kernel) -> bytes:
+    """Linux 那一侧的 tgpu 读的文件：小端的 'TGK1'、线程数、程序条数、数据字节数、两个字节的空，再是程序与数据。"""
+    head = b"TGK1" + struct.pack("<HHHH", k.threads, len(k.program), len(k.data), 0)
+    return head + struct.pack(f"<{len(k.program)}H", *k.program) + bytes(k.data)
+
+
 def video(at: int = 0, w: int = 16, h: int = 16, rgb: bool = False, on: bool = True):
     """把数据存储里从 at 起的 w × h 个字节扫到 VGA 与 HDMI 上，横竖各按整数倍放大到铺满 640 × 480。"""
     if not (0 < w <= 255 and 0 < h <= 255 and 0 <= at and at + w * h <= 256):
@@ -182,6 +189,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hz", type=int, default=2_000_000, help="SCK，不超过芯片主频的八分之一")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ident")
+    p = sub.add_parser("build", help="汇编成 Linux 上 tgpu 读的 .tgk")
+    p.add_argument("kernel")
+    p.add_argument("-o", "--out", required=True)
     p = sub.add_parser("video", help="把数据存储里的一块扫到屏上")
     p.add_argument("--at", type=int, default=0, help="起始字节")
     p.add_argument("--size", default="16x16", help="宽x高")
@@ -196,6 +206,9 @@ def main(argv=None) -> int:
     if a.cmd == "emu":
         k = assemble(pathlib.Path(a.kernel).read_text(encoding="utf-8"))
         print(show(emulate(k)[:a.show * a.rows], a.show))
+        return 0
+    if a.cmd == "build":
+        pathlib.Path(a.out).write_bytes(tgk(assemble(pathlib.Path(a.kernel).read_text(encoding="utf-8"))))
         return 0
     if not (a.spidev or a.ftdi):
         ap.error("要 --spidev 或 --ftdi")
