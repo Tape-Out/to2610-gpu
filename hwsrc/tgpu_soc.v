@@ -8,6 +8,9 @@
 //   0x00C CYCLES   从起跑到 done 的时钟拍数
 //   0x010 ID       0x54475055（「TGPU」）
 //   0x014 CONFIG   高字节核数，低字节每块线程数
+//   0x018 VCTRL    VGA：第 0 位开，第 1 位 RGB332（0 是灰度）
+//   0x01C VFMT     帧缓冲在数据存储里的起始地址、宽、高，各一个字节（低到高）
+//   0x020 VSCALE   每个源像素占几个屏上像素：低 10 位横、16 起 10 位竖
 //   0x400 起       程序存储，256 个字，每字 16 位
 //   0x800 起       数据存储，256 个字节，每个占一个字
 module tgpu_soc #(
@@ -22,7 +25,14 @@ module tgpu_soc #(
   output wire miso,
   output wire miso_oe,
   output wire done,
-  output wire busy
+  output wire busy,
+  output wire [2:0] vga_r,
+  output wire [2:0] vga_g,
+  output wire [1:0] vga_b,
+  output wire vga_hs,
+  output wire vga_vs,
+  output wire vga_de,
+  output wire vga_pclk
 );
   localparam CH = 4;    // 数据存储的通道数，上游的测试写死了 4
   localparam [7:0] CORES = NUM_CORES;
@@ -49,6 +59,9 @@ module tgpu_soc #(
   reg [1:0]  rst_cnt;
   reg [7:0]  threads;
   reg [31:0] cycles;
+  reg [1:0]  vctrl;
+  reg [23:0] vfmt;
+  reg [25:0] vscale;
   wire       gdone;
   wire       grst = !rst_n || rst_cnt[1];
 
@@ -61,6 +74,10 @@ module tgpu_soc #(
       rst_cnt <= 2'd3;
       threads <= 8'd0;
       cycles <= 32'd0;
+      // 复位后的格式就是整块数据存储当 16 × 16 的图，正好铺满一屏
+      vctrl <= 2'd0;
+      vfmt <= {8'd16, 8'd16, 8'd0};
+      vscale <= {10'd30, 6'd0, 10'd40};
     end else begin
       if (rst_cnt != 2'd0) rst_cnt <= rst_cnt - 2'd1;
       if (start && rst_cnt == 2'd0 && !gdone) cycles <= cycles + 32'd1;
@@ -72,6 +89,9 @@ module tgpu_soc #(
         end
       end
       if (we && sel_reg && idx == 8'd1) threads <= wdata[7:0];
+      if (we && sel_reg && idx == 8'd6) vctrl <= wdata[1:0];
+      if (we && sel_reg && idx == 8'd7) vfmt <= wdata[23:0];
+      if (we && sel_reg && idx == 8'd8) vscale <= {wdata[25:16], 6'd0, wdata[9:0]};
     end
   end
 
@@ -110,6 +130,15 @@ module tgpu_soc #(
     if (we && sel_data) data[idx] <= wdata[7:0];
   end
 
+  wire [7:0] vaddr;
+  vga video (
+    .clk(clk), .rst_n(rst_n), .en(vctrl[0]), .rgb(vctrl[1]),
+    .base(vfmt[7:0]), .w(vfmt[15:8]), .h(vfmt[23:16]), .sx(vscale[9:0]), .sy(vscale[25:16]),
+    .addr(vaddr), .pix(data[vaddr]),
+    .r(vga_r), .g(vga_g), .b(vga_b), .hs(vga_hs), .vs(vga_vs),
+    .de(vga_de), .pclk(vga_pclk)
+  );
+
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       p_ready <= 1'b0;
@@ -135,6 +164,9 @@ module tgpu_soc #(
         8'd3: rdata = cycles;
         8'd4: rdata = 32'h5447_5055;
         8'd5: rdata = {16'd0, CORES, TPB};
+        8'd6: rdata = {30'd0, vctrl};
+        8'd7: rdata = {8'd0, vfmt};
+        8'd8: rdata = {6'd0, vscale};
         default: err = 1'b1;
       endcase
     end else err = 1'b1;

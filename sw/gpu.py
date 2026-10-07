@@ -3,6 +3,7 @@
     python3 sw/gpu.py emu sw/kernels/shade.asm --show 8            只在本机跑软件模型
     python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 run sw/kernels/shade.asm --show 8
     python3 sw/gpu.py --spidev 0.0 ident
+    python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 video --at 64 --size 8x8   数据存储的第 64 字节起当 8 × 8 的图扫到屏上
 
 内核的写法照 tiny-gpu 的说明：`.threads N` 给线程数，`.data …` 依次往数据存储里放初值，其后是指令。
 每个线程从头跑到 RET；`%blockIdx`、`%blockDim`、`%threadIdx` 三个只读寄存器告诉它自己是谁。
@@ -18,6 +19,7 @@ import spis  # noqa: E402
 
 BASE = 0x1000_0000
 CTRL, THREADS, STATUS, CYCLES, ID, CONFIG = 0x000, 0x004, 0x008, 0x00C, 0x010, 0x014
+VCTRL, VFMT, VSCALE = 0x018, 0x01C, 0x020
 PROG, DATA = 0x400, 0x800
 TGPU = 0x5447_5055
 
@@ -160,6 +162,14 @@ def memory(n: int = 256):
     return [x & 0xFF for x in w]
 
 
+def video(at: int = 0, w: int = 16, h: int = 16, rgb: bool = False, on: bool = True):
+    """把数据存储里从 at 起的 w × h 个字节扫到 VGA 与 HDMI 上，横竖各按整数倍放大到铺满 640 × 480。"""
+    if not (0 < w <= 255 and 0 < h <= 255 and 0 <= at and at + w * h <= 256):
+        raise ValueError(f"{w} × {h} 从 {at} 起放不进 256 字节的数据存储")
+    yield from spis.wr(BASE + VFMT, at | w << 8 | h << 16, 640 // w | (480 // h) << 16)
+    yield from spis.wr(BASE + VCTRL, int(on) | int(rgb) << 1)
+
+
 def show(mem: list[int], width: int) -> str:
     return "\n".join(" ".join(f"{v:3}" for v in mem[i:i + width]) for i in range(0, len(mem), width))
 
@@ -172,6 +182,11 @@ def main(argv=None) -> int:
     ap.add_argument("--hz", type=int, default=2_000_000, help="SCK，不超过芯片主频的八分之一")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ident")
+    p = sub.add_parser("video", help="把数据存储里的一块扫到屏上")
+    p.add_argument("--at", type=int, default=0, help="起始字节")
+    p.add_argument("--size", default="16x16", help="宽x高")
+    p.add_argument("--rgb", action="store_true", help="每字节按 RGB332 解，默认是灰度")
+    p.add_argument("--off", action="store_true", help="关掉，脚上只剩不动的同步")
     for name in ("emu", "run"):
         p = sub.add_parser(name)
         p.add_argument("kernel")
@@ -193,6 +208,11 @@ def main(argv=None) -> int:
     if a.cmd == "ident":
         cores, tpb = run(config())
         print(f"to2610-gpu：{cores} 核，每块 {tpb} 个线程")
+        return 0
+    if a.cmd == "video":
+        run(config())
+        w, _, h = a.size.lower().partition("x")
+        run(video(a.at, int(w), int(h), a.rgb, not a.off))
         return 0
     k = assemble(pathlib.Path(a.kernel).read_text(encoding="utf-8"))
     cores, tpb = run(config())

@@ -9,6 +9,7 @@ import sys
 
 import cocotb
 from cocotb.clock import Clock
+from cocotb.triggers import ClockCycles
 
 import bench as B
 
@@ -72,7 +73,7 @@ async def management(dut):
     assert await spi.do(spis.rd1(G.BASE + G.DATA + 4 * 7)) == 0x56
     assert await spi.do(spis.rd(G.BASE + G.PROG + 4 * 6, 3)) == [prog[6], 0x1234, prog[8]]
     assert await spi.do(spis.status()) == 0
-    for bad in (0x2000_0000, G.BASE + 0x018, G.BASE + 0xC00):
+    for bad in (0x2000_0000, G.BASE + 0x024, G.BASE + 0xC00):
         await spi.do(spis.rd1(bad))
         assert await spi.do(spis.status()) == 1, hex(bad)
         assert await spi.do(spis.status()) == 0
@@ -242,3 +243,110 @@ async def upstream_matmul(dut):
     assert got[8:12] == want, got[8:12]
     assert got == G.emulate(k)
     dut._log.info("上游 matmul：四个线程 %d 拍", n)
+
+
+def gray(p: int) -> int:
+    return (p >> 5) << 5 | (p >> 5) << 2 | p >> 6
+
+
+class Screen:
+    """视频那十二根脚：逐拍读，或按步长粗看。颜色按 RGB332 拼回一个字节。"""
+
+    def __init__(self, c, dut):
+        self.c, self.dut = c, dut
+        self.hs, self.vs, self.de, self.pk = (c.bit(f"vga_{n}[0]", "out") for n in ("hs", "vs", "de", "pclk"))
+        self.col = [c.bit(f"vga_{n}[{i}]", "out") for n, k in (("b", 2), ("g", 3), ("r", 3)) for i in range(k)]
+
+    def pins(self) -> list[int]:
+        return [self.hs, self.vs, self.de, self.pk, *self.col]
+
+    def pix(self, o: int) -> int:
+        return sum(((o >> b) & 1) << i for i, b in enumerate(self.col))
+
+    def on(self, o: int, b: int) -> bool:
+        return bool((o >> b) & 1)
+
+    async def until(self, f, step: int = 16, limit: int = 2_000_000) -> int:
+        n = 0
+        while not f(self.c.read()[0]):
+            await ClockCycles(self.dut.clock, step)
+            n += step
+            assert n < limit, "等不到"
+        return n
+
+    async def rows(self, n: int):
+        """等场同步过去，跳到第 0 行之前，逐拍取像素钟上升沿那一拍的颜色，收 n 行；顺带记行同步每次落下与抬起的拍。"""
+        await self.until(lambda o: not self.on(o, self.vs))
+        await self.until(lambda o: self.on(o, self.vs))
+        await ClockCycles(self.dut.clock, 33 * 1600 - 400)
+        got, line, edges = [], [], []
+        h, k, t = True, False, 0
+        while len(got) < n:
+            await ClockCycles(self.dut.clock, 1)
+            t += 1
+            o = self.c.read()[0]
+            if self.on(o, self.hs) != h:
+                h = not h
+                edges.append((t, h))
+            if self.on(o, self.pk) and not k:
+                if self.on(o, self.de):
+                    line.append(self.pix(o))
+                elif line:
+                    got.append(line)
+                    line = []
+            k = self.on(o, self.pk)
+            assert t < (n + 2) * 1600, (len(got), len(line))
+        return got, edges
+
+
+@cocotb.test()
+async def video(dut):
+    """VGA 与 HDMI 口：关着时同步不动；行 1600 拍、行同步 192 拍、场 525 行、场同步两行、每场 480 行 DE；
+    数据存储里的图按放大倍数出现在每行 DE 的开头，灰度与 RGB332 两种；扫着屏照样能算。"""
+    c, spi = await up(dut)
+    s = Screen(c, dut)
+    _, e = c.read()
+    assert all(s.on(e, b) for b in s.pins()), "视频脚要一直驱动"
+    for _ in range(2000):
+        await ClockCycles(dut.clock, 1)
+        o = c.read()[0]
+        assert s.on(o, s.hs) and s.on(o, s.vs) and not s.on(o, s.de) and s.pix(o) == 0, "关着时同步停在高、DE 与颜色是 0"
+
+    await spi.do(G.video())
+    k = kernel("shade")
+    got, _ = await run(c, spi, k)
+    assert got == G.emulate(k), "扫屏不能碰计算"
+    img = got[64:128]
+    await spi.do(G.video(64, 8, 8))
+    assert await spi.do(spis.rd(G.BASE + G.VCTRL, 3)) == [1, 64 | 8 << 8 | 8 << 16, 80 | 60 << 16]
+    await spi.do(spis.wr(G.BASE + G.VSCALE, 3 | 2 << 16))
+
+    await s.until(lambda o: s.on(o, s.vs))
+    await s.until(lambda o: not s.on(o, s.vs))
+    n = await s.until(lambda o: s.on(o, s.vs))
+    assert abs(n - 2 * 1600) <= 16, n
+    lines, last = 0, False
+    while True:
+        await ClockCycles(dut.clock, 16)
+        n += 16
+        o = c.read()[0]
+        lines += s.on(o, s.de) and not last
+        last = s.on(o, s.de)
+        if not s.on(o, s.vs):
+            break
+        assert n < 1_000_000
+    assert abs(n - 525 * 1600) <= 16, n
+    assert lines == 480, lines
+
+    for rgb in (False, True):
+        if rgb:
+            await spi.do(spis.wr(G.BASE + G.VCTRL, 3))
+        rows, edges = await s.rows(18)
+        for y, row in enumerate(rows):
+            want = [img[(y // 2) * 8 + x // 3] if y < 16 and x < 24 else 0 for x in range(640)]
+            assert row == (want if rgb else [gray(p) for p in want]), (rgb, y, row[:26])
+        falls = [t for t, h in edges if not h]
+        assert [b - a for a, b in zip(falls, falls[1:])] == [1600] * (len(falls) - 1) and len(falls) > 10, falls
+        widths = [b[0] - a[0] for a, b in zip(edges, edges[1:]) if not a[1]]
+        assert widths and all(w == 192 for w in widths), widths
+    dut._log.info("视频：每行 1600 拍、行同步 192 拍、每场 525 行 480 行 DE；8 × 8 的图按 3 × 2 放大，灰度与 RGB332 都对")

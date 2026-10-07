@@ -31,6 +31,7 @@ emit:
   - build/src/gpu.v
   - hwsrc/spi_regs.v
   - hwsrc/tgpu_soc.v
+  - hwsrc/vga.v
   clock:
     port: clk
   reset:
@@ -53,11 +54,23 @@ emit:
     map:
       done: done
       busy: busy
+  - endpoint: video
+    kind: physical
+    type: VgaPins
+    map:
+      r: vga_r
+      g: vga_g
+      b: vga_b
+      hs: vga_hs
+      vs: vga_vs
+      de: vga_de
+      pclk: vga_pclk
   limits:
   - 四个核、每块四个线程是写死的；线程数要是 4 的整数倍，上游在最后一块装不满时不结束
   - 程序 256 条、数据 256 字节、寄存器与数据都是 8 位，是 tiny-gpu 指令集的上限
   - 上游的比较只分得出相等与不等，BRn 实际是「不等则跳」；除以 0 的结果不定
   - 没有处理器，内核与数据由片外主机经 SPI 装入
+  - 视频只出并行 RGB332 与同步，HDMI 要片外一颗 TFP410；像素钟是主频的一半，主频换了画面跟着变
 asic:
   top: to2610_gpu
   frame: mpc
@@ -73,6 +86,15 @@ asic:
   - { out: miso, oe: miso_oe }
   - done
   - busy
+  # 视频放在 payload 的最低十二位：红三位、绿三位、蓝两位、行同步、场同步、DE、像素钟。
+  # 板上同一组线一路经电阻网络进 VGA，一路进 TFP410 出 HDMI；直接出 TMDS 要 250 MHz 的位钟，Frame 里没有 PLL
+  - { port: vga_r, at: 0 }
+  - vga_g
+  - vga_b
+  - vga_hs
+  - vga_vs
+  - vga_de
+  - vga_pclk
 tasks:
   src:
     desc: 拼源码树：tiny-gpu 的源码过 sv2v
