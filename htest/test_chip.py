@@ -350,3 +350,29 @@ async def video(dut):
         widths = [b[0] - a[0] for a, b in zip(edges, edges[1:]) if not a[1]]
         assert widths and all(w == 192 for w in widths), widths
     dut._log.info("视频：每行 1600 拍、行同步 192 拍、每场 525 行 480 行 DE；8 × 8 的图按 3 × 2 放大，灰度与 RGB332 都对")
+
+
+@cocotb.test()
+async def raster(dut):
+    """渲染管线：主机把三角形换成边函数（顶点与建立），GPU 一个线程一个像素做光栅化与着色。画两个有重叠的三角形，
+    后画的盖住先画的；帧缓冲与另写的判定、与软件模型逐像素相同；内核里带的默认三角形就是 triangle 算出来的那一个。"""
+    c, spi = await up(dut)
+    k = kernel("raster")
+    tris = [((1, 1), (6, 2), (3, 6), 200), ((0, 7), (7, 7), (4, 0), 90)]
+    ts = [G.triangle(*t) for t in tris]
+    assert k.data[:10] == ts[0], k.data[:10]
+    await spi.do(G.load(G.Kernel(k.program, [0] * 64, k.threads)))
+    await spi.do(G.draw(ts))
+    fb = (await spi.do(G.memory()))[64:128]
+    want = [0] * 64
+    for (a, b, cc, col), t in zip(tris, ts):
+        for i in range(64):
+            if G.inside(t, i % 8, i // 8):
+                want[i] = col
+    assert fb == want, G.show(fb, 8)
+    assert 0 < sum(v == 200 for v in fb) < sum(v == 90 for v in fb), "两个都要看得见，后画的那个更大"
+    mem = [0] * 256
+    for t in ts:
+        mem = G.emulate(G.Kernel(k.program, t + mem[10:], k.threads))
+    assert mem[64:128] == fb
+    dut._log.info("raster：两个三角形\n%s", G.show(fb, 8))

@@ -163,6 +163,41 @@ def memory(n: int = 256):
     return [x & 0xFF for x in w]
 
 
+def triangle(a, b, c, color: int) -> list[int]:
+    """把一个三角形换成 raster.asm 要的十个字节：三条边的 A、B、C（8 位回绕）与颜色。这是渲染管线的顶点与建立
+    两步，留在主机上做。边函数在三角形里不为负；8 × 8 的每个像素上它都要落在 −128 至 127，否则 8 位取不对符号。"""
+    pts = (a, b, c)
+    area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    if not area:
+        raise ValueError(f"{pts} 三个点在一条线上")
+    s = 1 if area > 0 else -1
+    out = []
+    for p, q in zip(pts, pts[1:] + pts[:1]):
+        ea, eb = -(q[1] - p[1]) * s, (q[0] - p[0]) * s
+        ec = -(ea * p[0] + eb * p[1])
+        if any(not -128 <= ea * x + eb * y + ec <= 127 for y in range(8) for x in range(8)):
+            raise ValueError(f"{pts} 的边函数超出 8 位：顶点放在 0 至 7 之内再试")
+        out += [ea & 0xFF, eb & 0xFF, ec & 0xFF]
+    return out + [color & 0xFF]
+
+
+def inside(t, x: int, y: int) -> bool:
+    """triangle 那十个字节在像素 (x, y) 上的判定，照硬件的写法：三条边都不为负。"""
+    def sx(v):
+        return v - 256 if v >= 128 else v
+    return all(sx((t[3 * i] * x + t[3 * i + 1] * y + t[3 * i + 2]) & 0xFF) >= 0 for i in range(3))
+
+
+def draw(tris: list[list[int]]):
+    """在已经装好的 raster.asm 上一个接一个画：每个三角形写一次那十个字节、起跑、等算完。帧缓冲不清。"""
+    for t in tris:
+        yield from spis.wr(BASE + DATA, *t)
+        yield from spis.wr(BASE + CTRL, 0)
+        yield from start()
+        while not (yield from done()):
+            pass
+
+
 def tgk(k: Kernel) -> bytes:
     """Linux 那一侧的 tgpu 读的文件：小端的 'TGK1'、线程数、程序条数、数据字节数、两个字节的空，再是程序与数据。"""
     head = b"TGK1" + struct.pack("<HHHH", k.threads, len(k.program), len(k.data), 0)
@@ -189,6 +224,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hz", type=int, default=2_000_000, help="SCK，不超过芯片主频的八分之一")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ident")
+    p = sub.add_parser("draw", help="渲染：装上 raster.asm，在 8 × 8 的帧缓冲上一个接一个画三角形")
+    p.add_argument("tris", nargs="+", metavar="x0,y0:x1,y1:x2,y2:颜色")
+    p.add_argument("--video", action="store_true", help="画完扫到屏上")
     p = sub.add_parser("build", help="汇编成 Linux 上 tgpu 读的 .tgk")
     p.add_argument("kernel")
     p.add_argument("-o", "--out", required=True)
@@ -218,6 +256,19 @@ def main(argv=None) -> int:
     else:
         x = spis.ftdi(a.ftdi, a.hz)
     run = lambda op: spis.run(op, x)  # noqa: E731
+    if a.cmd == "draw":
+        run(config())
+        tris = []
+        for s in a.tris:
+            *v, col = s.split(":")
+            tris.append(triangle(*(tuple(int(n) for n in p.split(",")) for p in v), int(col)))
+        k = assemble((pathlib.Path(__file__).parent / "kernels" / "raster.asm").read_text(encoding="utf-8"))
+        run(load(Kernel(k.program, [0] * 64, k.threads)))
+        run(draw(tris))
+        print(show(run(memory())[64:128], 8))
+        if a.video:
+            run(video(64, 8, 8))
+        return 0
     if a.cmd == "ident":
         cores, tpb = run(config())
         print(f"to2610-gpu：{cores} 核，每块 {tpb} 个线程")
