@@ -18,7 +18,8 @@ got=$(git rev-parse HEAD)
 git checkout -q -- .
 rm -rf lib/CL/devices/tgpu
 git apply "$here/register.patch"
-cp -r "$here/tgpu" lib/CL/devices/tgpu
+# TGPU_SRC 给了就拷那一份（埋错时用）
+cp -r "${TGPU_SRC:-$here/tgpu}" lib/CL/devices/tgpu
 cmake -S . -B "$W/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" \
   -DENABLE_LLVM=OFF -DENABLE_HOST_CPU_DEVICES=OFF -DENABLE_TGPU_DEVICE=ON -DENABLE_ICD=OFF \
   -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_POCLCC=OFF -DENABLE_HWLOC=OFF > "$W/cmake.log" 2>&1

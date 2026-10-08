@@ -109,6 +109,10 @@ tasks:
   opencl:
     desc: 编带 tgpu 设备的 PoCL，经 OpenCL 在流片的 .v 上跑内建内核与 .tgk
     run: bash htest/opencl.sh {{out}}
+  opencl-faults:
+    desc: tgpu 设备里逐个改掉一处，在同一份交付的 .v 上重跑 OpenCL 那一层，每一处都要红，六处
+    run: bash htest/opencl-faults.sh {{out}}
+    timeout: 14400
   vulkan:
     desc: 同一组计算与渲染写成 GLSL 着色器，在 lavapipe 的计算管线与图形管线上跑，与流片的 .v 逐字节比
     run: bash htest/vulkan.sh {{out}}
@@ -119,6 +123,7 @@ test:
   upstream:
   - { name: chip, task: chip, timeout: 3600 }
   - { name: opencl, task: opencl, timeout: 3600 }
+  - { name: opencl-faults, task: opencl-faults, timeout: 14400 }
   - { name: vulkan, task: vulkan, timeout: 3600 }
   - { name: opengl, task: opengl, timeout: 3600 }
 targets:
