@@ -106,9 +106,13 @@ tasks:
   chip:
     desc: 出流片的 .v，再在它上面跑整片测试
     run: bash htest/chip.sh {{out}}
+  opencl:
+    desc: 编带 tgpu 设备的 PoCL，经 OpenCL 在流片的 .v 上跑内建内核与 .tgk
+    run: bash htest/opencl.sh {{out}}
 test:
   upstream:
   - { name: chip, task: chip, timeout: 3600 }
+  - { name: opencl, task: opencl, timeout: 3600 }
 targets:
   foreign:
     driver: foreign

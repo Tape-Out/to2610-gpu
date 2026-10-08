@@ -3,6 +3,8 @@
     python3 sw/gpu.py emu sw/kernels/shade.asm --show 8            只在本机跑软件模型
     python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 run sw/kernels/shade.asm --show 8
     python3 sw/gpu.py --spidev 0.0 ident
+    python3 sw/gpu.py --model run sw/kernels/saxpy.asm                 不接板子，对着照寄存器写的软件模型
+    python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 serve 2610            挂到 TCP 上给 PoCL 的 tgpu 设备
     python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 video --at 64 --size 8x8   数据存储的第 64 字节起当 8 × 8 的图扫到屏上
 
 内核的写法照 tiny-gpu 的说明：`.threads N` 给线程数，`.data …` 依次往数据存储里放初值，其后是指令。
@@ -23,6 +25,7 @@ CTRL, THREADS, STATUS, CYCLES, ID, CONFIG = 0x000, 0x004, 0x008, 0x00C, 0x010, 0
 VCTRL, VFMT, VSCALE = 0x018, 0x01C, 0x020
 PROG, DATA = 0x400, 0x800
 TGPU = 0x5447_5055
+WRITABLE = {CTRL: 0x1, THREADS: 0xFF, VCTRL: 0x3, VFMT: 0xFF_FFFF, VSCALE: 0x3FF_03FF}
 
 OPS = {"NOP": 0x0, "CMP": 0x2, "ADD": 0x3, "SUB": 0x4, "MUL": 0x5, "DIV": 0x6,
        "LDR": 0x7, "STR": 0x8, "CONST": 0x9, "RET": 0xF}
@@ -212,6 +215,72 @@ def video(at: int = 0, w: int = 16, h: int = 16, rgb: bool = False, on: bool = T
     yield from spis.wr(BASE + VCTRL, int(on) | int(rgb) << 1)
 
 
+class Model:
+    """照 hwsrc/tgpu_soc.v 写的整颗芯片，说 spis 的协议。没有板子时本仓的工具与 PoCL 的 tgpu 设备都能对着它跑。
+    起跑那一下就把内核跑完；线程数不是每块线程数的整数倍时与硬件一样永远不结束。拍数不模拟，读出来是 0。"""
+
+    def __init__(self, cores: int = 4, tpb: int = 4):
+        self.cores, self.tpb = cores, tpb
+        self.prog, self.data = [0] * 256, [0] * 256
+        self.reg = {CTRL: 0, THREADS: 0, VCTRL: 0, VFMT: 16 << 8 | 16 << 16, VSCALE: 40 | 30 << 16}
+        self.done = self.err = 0
+
+    def get(self, a: int) -> int:
+        o = a - BASE
+        if PROG <= o < PROG + 0x400 and o % 4 == 0:
+            return self.prog[(o - PROG) // 4]
+        if DATA <= o < DATA + 0x400 and o % 4 == 0:
+            return self.data[(o - DATA) // 4]
+        if o in self.reg:
+            return self.reg[o]
+        match o:
+            case 0x008:
+                return self.done
+            case 0x00C:
+                return 0
+            case 0x010:
+                return TGPU
+            case 0x014:
+                return self.cores << 8 | self.tpb
+        self.err = 1
+        return 0
+
+    def put(self, a: int, w: int):
+        o = a - BASE
+        if PROG <= o < PROG + 0x400 and o % 4 == 0:
+            self.prog[(o - PROG) // 4] = w & 0xFFFF
+        elif DATA <= o < DATA + 0x400 and o % 4 == 0:
+            self.data[(o - DATA) // 4] = w & 0xFF
+        elif o in WRITABLE:
+            self.reg[o] = w & WRITABLE[o]
+            if o == CTRL:
+                self.done = 0
+                t = self.reg[THREADS]
+                if w & 1 and t % self.tpb == 0:
+                    self.data = emulate(Kernel(self.prog, self.data, t), self.tpb)
+                    self.done = 1
+        else:
+            self.err = 1
+
+    def xfer(self, tx: bytes) -> bytes:
+        rx = bytearray(len(tx))
+        a = int.from_bytes(tx[1:5], "big")
+        match tx[0]:
+            case 0x02:
+                for i in range(5, len(tx) - 3, 4):
+                    self.put(a + i - 5, int.from_bytes(tx[i:i + 4], "big"))
+            case 0x03:
+                rx[6:10] = self.get(a).to_bytes(4, "big")
+            case 0x0B:
+                for i in range(tx[5] + 1):
+                    rx[7 + 4 * i:11 + 4 * i] = self.get(a + 4 * i).to_bytes(4, "big")
+            case 0x05:
+                rx[1], self.err = self.err, 0
+            case 0x9F:
+                rx[1:5] = b"SPIS"
+        return bytes(rx)
+
+
 def show(mem: list[int], width: int) -> str:
     return "\n".join(" ".join(f"{v:3}" for v in mem[i:i + width]) for i in range(0, len(mem), width))
 
@@ -221,9 +290,12 @@ def main(argv=None) -> int:
     link = ap.add_mutually_exclusive_group()
     link.add_argument("--spidev", help="总线.片选，如 0.0")
     link.add_argument("--ftdi", help="pyftdi 的地址，如 ftdi://ftdi:232h/1")
+    link.add_argument("--model", action="store_true", help="不接板子，对着照寄存器写的软件模型")
     ap.add_argument("--hz", type=int, default=2_000_000, help="SCK，不超过芯片主频的八分之一")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ident")
+    p = sub.add_parser("serve", help="把这条 SPI 挂到 TCP 上，给 PoCL 的 tgpu 设备用（POCL_TGPU0_PARAMETERS=tcp:127.0.0.1:端口）")
+    p.add_argument("port", type=int)
     p = sub.add_parser("draw", help="渲染：装上 raster.asm，在 8 × 8 的帧缓冲上一个接一个画三角形")
     p.add_argument("tris", nargs="+", metavar="x0,y0:x1,y1:x2,y2:颜色")
     p.add_argument("--video", action="store_true", help="画完扫到屏上")
@@ -248,13 +320,17 @@ def main(argv=None) -> int:
     if a.cmd == "build":
         pathlib.Path(a.out).write_bytes(tgk(assemble(pathlib.Path(a.kernel).read_text(encoding="utf-8"))))
         return 0
-    if not (a.spidev or a.ftdi):
-        ap.error("要 --spidev 或 --ftdi")
-    if a.spidev:
+    if not (a.spidev or a.ftdi or a.model):
+        ap.error("要 --spidev、--ftdi 或 --model")
+    if a.model:
+        x = Model().xfer
+    elif a.spidev:
         bus, _, dev = a.spidev.partition(".")
         x = spis.spidev(int(bus), int(dev or 0), a.hz)
     else:
         x = spis.ftdi(a.ftdi, a.hz)
+    if a.cmd == "serve":
+        spis.serve(x, a.port)
     run = lambda op: spis.run(op, x)  # noqa: E731
     if a.cmd == "draw":
         run(config())

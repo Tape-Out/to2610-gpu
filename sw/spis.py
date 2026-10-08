@@ -70,3 +70,20 @@ def ftdi(url: str = "ftdi://ftdi:232h/1", hz: int = 2_000_000):
     c.configure(url)
     port = c.get_port(cs=0, freq=hz, mode=0)
     return lambda tx: bytes(port.exchange(tx, duplex=True))
+
+
+def frame(tx: bytes) -> bytes:
+    """TCP 上的一次传输：4 字节大端的长度，再是要发的字节；回来的是同样长的应答，不带长度。"""
+    return len(tx).to_bytes(4, "big") + tx
+
+
+def serve(xfer, port: int, host: str = "127.0.0.1"):
+    """把一条 SPI 挂到 TCP 上，给开不了 USB 的程序用（PoCL 的 tgpu 设备）。连接一个接一个收，芯片的状态跨连接留着。"""
+    import socket
+    with socket.create_server((host, port)) as s:
+        while True:
+            c, _ = s.accept()
+            with c, c.makefile("rwb") as f:
+                while len(h := f.read(4)) == 4:
+                    f.write(xfer(f.read(int.from_bytes(h, "big"))))
+                    f.flush()

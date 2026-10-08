@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 整片测试：先 ran asic 出交付的那份 .v，再用 cocotb 在它上面跑 test_chip.py。
 # 用法：chip.sh <输出目录>。息壤的调用方式由任务环境里的 $XIRANG 给，它带着这次的搜索路径。
-# 已经跑过 ran asic 的，把它的输出目录给 CHIP_ASIC，就不再编一遍
+# 已经跑过 ran asic 的，把它的输出目录给 CHIP_ASIC，就不再编一遍；CHIP_MODULE 换跑别的用例文件（opencl.sh 用）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 O=$(realpath -m "$1")
@@ -11,7 +11,7 @@ A=${CHIP_ASIC:-$O/asic}
 [ -s "$A/report.json" ] || $XIRANG asic to2610-gpu --no-run -o "$A"
 export CHIP_REPORT=$A/report.json
 make -s -C htest -f "$(cocotb-config --makefiles)/Makefile.sim" SIM=icarus TOPLEVEL_LANG=verilog \
-  VERILOG_SOURCES="$A/to2610_gpu.v" TOPLEVEL=to2610_gpu MODULE=test_chip \
+  VERILOG_SOURCES="$A/to2610_gpu.v" TOPLEVEL=to2610_gpu MODULE=${CHIP_MODULE:-test_chip} \
   SIM_BUILD="$O/sim" COCOTB_RESULTS_FILE="$O/results.xml" > "$O/sim.log" 2>&1 || true
 tail -n 40 "$O/sim.log"
 # cocotb 失败时 make 照样返回 0，判据是结果文件

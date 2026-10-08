@@ -29,10 +29,24 @@ $ python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 run sw/kernels/shade.asm --show 8
 
 One thing the model has to copy: the comparison upstream implements only tells equal from unequal, so `BRn` branches when the operands differ.
 
+## OpenCL
+
+`sw/pocl/` adds a `tgpu` device to PoCL. Host programs call the plain OpenCL 1.2 API.
+
+```console
+$ bash sw/pocl/build.sh build/pocl ~/.local/pocl-tgpu            # PoCL v7.2 without LLVM, plus the clrun example
+$ python3 sw/gpu.py --ftdi ftdi://ftdi:232h/1 serve 2610 &        # or --model, with no board at all
+$ export POCL_DEVICES=tgpu POCL_TGPU0_PARAMETERS=tcp:127.0.0.1:2610
+$ clrun builtin 100                                               # pocl.add.i8, pocl.mul.i8, pocl.copy.i8
+$ python3 sw/gpu.py build sw/kernels/shade.asm -o shade.tgk && clrun tgk shade.tgk 8
+```
+
+Built-in kernels keep PoCL's names and semantics, and the device splits the data into tiles that fit the 256-byte data memory. A `.tgk` file goes through `clCreateProgramWithBinary`: one kernel, `main`, whose only argument is the whole data memory. There is no OpenCL C compiler, as that would need an LLVM backend for tiny-gpu.
+
 ## Testing and tape-out
 
 ```console
-$ ran test to2610-gpu                  # the chip tests, on the Verilog file that goes to the shuttle
+$ ran test to2610-gpu                  # the chip tests and the OpenCL tests, on the Verilog file that goes to the shuttle
 $ ran asic to2610-gpu                  # to2610_gpu.v, ecc at 50 MHz, report.json
 $ ran asic to2610-gpu --no-run         # only the Verilog file and ecc.toml
 ```

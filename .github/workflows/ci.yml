@@ -6,7 +6,8 @@ jobs:
     permissions:
       contents: write
     with:
-      # 整片测试：tiny-gpu 的源码过 sv2v，ran asic 用 yosys 展平出交付的 .v，cocotb 在它上面跑 iverilog
-      apt: iverilog yosys
+      # 整片测试：tiny-gpu 的源码过 sv2v，ran asic 用 yosys 展平出交付的 .v，cocotb 在它上面跑 iverilog；
+      # OpenCL 那一段要现编 PoCL
+      apt: iverilog yosys cmake ninja-build
       pip: cocotb==1.9.2
       sv2v: v0.0.13
