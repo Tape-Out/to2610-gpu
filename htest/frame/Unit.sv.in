@@ -8,7 +8,8 @@ module @UNIT_TOP@;
   localparam int IO_WIDTH = 66;
   localparam time HALF_PERIOD = 10ns;
 
-  // payload 位次，照流片说明的板级连接表
+  // payload 位次，照流片说明的板级连接表；视频（RGB332、两个同步、DE、像素钟）占 0 起的 12 位
+  localparam int VIDEO = 12;
   localparam int SCK = 56;
   localparam int CS_N = 57;
   localparam int MOSI = 58;
@@ -114,10 +115,11 @@ module @UNIT_TOP@;
     repeat (4) @(posedge clock);
     #1ns;
 
-    // 方向：done 与 busy 一直驱动；MISO 要等 CS_N 拉低；别的位都不驱动。复位后没在跑
+    // 方向：视频、done 与 busy 一直驱动；MISO 要等 CS_N 拉低；别的位都不驱动。复位后没在跑
     if (io_oe[BUSY:DONE] !== 2'b11) $fatal(1, "done and busy are not driven after reset");
-    if (io_oe[MISO:0] !== '0 || io_oe[IO_WIDTH-1:BUSY+1] !== '0)
-      $fatal(1, "pads other than done and busy are driven after reset: %h", io_oe);
+    if (io_oe[VIDEO-1:0] !== '1) $fatal(1, "video pads are not driven after reset: %h", io_oe);
+    if (io_oe[MISO:VIDEO] !== '0 || io_oe[IO_WIDTH-1:BUSY+1] !== '0)
+      $fatal(1, "pads other than video, done and busy are driven after reset: %h", io_oe);
     if (io_out[BUSY] !== 1'b0) $fatal(1, "busy is high after reset");
 
     spi_begin();
