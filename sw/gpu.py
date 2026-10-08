@@ -168,7 +168,9 @@ def memory(n: int = 256):
 
 def triangle(a, b, c, color: int) -> list[int]:
     """把一个三角形换成 raster.asm 要的十个字节：三条边的 A、B、C（8 位回绕）与颜色。这是渲染管线的顶点与建立
-    两步，留在主机上做。边函数在三角形里不为负；8 × 8 的每个像素上它都要落在 −128 至 127，否则 8 位取不对符号。"""
+    两步，留在主机上做。顶点给的是像素中心的坐标。边函数在三角形里不为负；8 × 8 的每个像素上它都要落在 −128 至 127，
+    否则 8 位取不对符号。像素中心正落在边上时照 Vulkan 与 Direct3D 的左上规则只归一个三角形：不是左上边的 C 减 1，
+    内核里的 E ≥ 0 在这条边上就成了 E > 0，相邻两个三角形的公共边不会画两遍。"""
     pts = (a, b, c)
     area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
     if not area:
@@ -177,7 +179,7 @@ def triangle(a, b, c, color: int) -> list[int]:
     out = []
     for p, q in zip(pts, pts[1:] + pts[:1]):
         ea, eb = -(q[1] - p[1]) * s, (q[0] - p[0]) * s
-        ec = -(ea * p[0] + eb * p[1])
+        ec = -(ea * p[0] + eb * p[1]) - (not (ea > 0 or (ea == 0 and eb > 0)))
         if any(not -128 <= ea * x + eb * y + ec <= 127 for y in range(8) for x in range(8)):
             raise ValueError(f"{pts} 的边函数超出 8 位：顶点放在 0 至 7 之内再试")
         out += [ea & 0xFF, eb & 0xFF, ec & 0xFF]

@@ -1,0 +1,20 @@
+#version 460
+// 4-4-1 的两层感知机，一个线程认一个 2 × 2 图样，同 sw/kernels/mlp.asm：输入在 0 起每个样本 4 个，
+// 第一层的权在 64 起、偏置在 80 起，第二层的权在 84 起，结果写到 96 起。数都是 8 位有符号
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Mem { uint mem[256]; };
+layout(push_constant) uniform Launch { uint threads; };
+
+int s8(uint v) { return int(v << 24) >> 24; }
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= threads) return;
+  int acc = 0;
+  for (uint j = 0; j < 4; j++) {
+    uint h = mem[80 + j];
+    for (uint k = 0; k < 4; k++) h += mem[64 + j * 4 + k] * mem[i * 4 + k];
+    acc += s8(mem[84 + j]) * max(s8(h & 0xff), 0);
+  }
+  mem[96 + i] = uint(acc) & 0xff;
+}

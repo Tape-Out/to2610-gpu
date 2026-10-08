@@ -43,10 +43,20 @@ $ python3 sw/gpu.py build sw/kernels/shade.asm -o shade.tgk && clrun tgk shade.t
 
 Built-in kernels keep PoCL's names and semantics, and the device splits the data into tiles that fit the 256-byte data memory. A `.tgk` file goes through `clCreateProgramWithBinary`: one kernel, `main`, whose only argument is the whole data memory. There is no OpenCL C compiler, as that would need an LLVM backend for tiny-gpu.
 
+## Vulkan and OpenGL
+
+The same computations and the same triangles, written against the standard APIs and run on Mesa's software drivers, give byte-identical results to the chip. `sw/vk/` holds five GLSL compute shaders, one per assembly kernel, with `vkrun` to dispatch one; `vkdraw` sends triangles through the Vulkan graphics pipeline into an 8 × 8 framebuffer. `sw/gl/gldraw` does the same through OpenGL 4.5 on a surfaceless EGL display. Vertices from `gpu.py` are pixel centres, shifted by 0.5 on the way in, and edges follow the top-left rule.
+
+```console
+$ bash sw/vk/build.sh build/vk && bash sw/gl/build.sh build/gl
+$ echo "1.5 1.5 6.5 2.5 3.5 6.5 200" | build/vk/vkdraw build/vk/tri_vert.spv build/vk/tri_frag.spv | xxd
+$ echo "1.5 1.5 6.5 2.5 3.5 6.5 200" | EGL_PLATFORM=surfaceless build/gl/gldraw | xxd
+```
+
 ## Testing and tape-out
 
 ```console
-$ ran test to2610-gpu                  # the chip tests and the OpenCL tests, on the Verilog file that goes to the shuttle
+$ ran test to2610-gpu                  # the chip, OpenCL, Vulkan and OpenGL tests, on the Verilog file that goes to the shuttle
 $ ran asic to2610-gpu                  # to2610_gpu.v, ecc at 50 MHz, report.json
 $ ran asic to2610-gpu --no-run         # only the Verilog file and ecc.toml
 ```

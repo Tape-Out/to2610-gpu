@@ -7,7 +7,10 @@ jobs:
       contents: write
     with:
       # 整片测试：tiny-gpu 的源码过 sv2v，ran asic 用 yosys 展平出交付的 .v，cocotb 在它上面跑 iverilog；
-      # OpenCL 那一段要现编 PoCL
-      apt: iverilog yosys cmake ninja-build
+      # OpenCL 那一段要现编 PoCL；Vulkan 那一段编着色器与 vkrun、vkdraw，跑在 Mesa 的 lavapipe 上；
+      # OpenGL 那一段编 gldraw，跑在 llvmpipe 上（EGL 的无表面平台）
+      apt: >-
+        iverilog yosys cmake ninja-build glslang-tools libvulkan-dev mesa-vulkan-drivers
+        libegl-dev libopengl-dev libgl-dev libegl-mesa0 libgl1-mesa-dri
       pip: cocotb==1.9.2
       sv2v: v0.0.13

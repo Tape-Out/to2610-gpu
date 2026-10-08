@@ -109,10 +109,18 @@ tasks:
   opencl:
     desc: 编带 tgpu 设备的 PoCL，经 OpenCL 在流片的 .v 上跑内建内核与 .tgk
     run: bash htest/opencl.sh {{out}}
+  vulkan:
+    desc: 同一组计算与渲染写成 GLSL 着色器，在 lavapipe 的计算管线与图形管线上跑，与流片的 .v 逐字节比
+    run: bash htest/vulkan.sh {{out}}
+  opengl:
+    desc: 同一组三角形走 OpenGL 的图形管线（llvmpipe），帧缓冲与流片的 .v 逐像素比
+    run: bash htest/opengl.sh {{out}}
 test:
   upstream:
   - { name: chip, task: chip, timeout: 3600 }
   - { name: opencl, task: opencl, timeout: 3600 }
+  - { name: vulkan, task: vulkan, timeout: 3600 }
+  - { name: opengl, task: opengl, timeout: 3600 }
 targets:
   foreign:
     driver: foreign
