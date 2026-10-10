@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 门级冒烟：布线后的网表配 ICS55 标准单元的功能模型（`functional`，不带时序），在 iverilog 上跑整片测试里的几项。
 # 网表与单元模型由组织的 asic.yml 给：GATE_NETLIST 是拼回了向量口的布线后网表，GATE_CELLS 是空格分隔的单元模型文件。
-# 门级比 RTL 慢二十多倍，默认只跑 saxpy（装载整块存储、十六个线程、读回），GATE_TESTS 换别的（逗号分隔）。
+# 门级比 RTL 慢二十多倍，默认跑整片测试里除 video 与两个上游示例之外的七项：video 在 RTL 上就要十一分钟，
+# 门级要四个钟头，加上别的会逼近一个作业的六小时。GATE_TESTS 换别的（逗号分隔）。
 # 用法：gate.sh <输出目录>
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +14,7 @@ A=${CHIP_ASIC:-$O/asic}
 export CHIP_REPORT=$A/report.json
 make -s -C htest -f "$(cocotb-config --makefiles)/Makefile.sim" SIM=icarus TOPLEVEL_LANG=verilog \
   VERILOG_SOURCES="${GATE_NETLIST:?要布线后的网表} ${GATE_CELLS:?要单元模型}" COMPILE_ARGS="-Dfunctional" TOPLEVEL=to2610_gpu MODULE=test_chip \
-  TESTCASE="${GATE_TESTS:-saxpy}" SIM_BUILD="$O/sim" COCOTB_RESULTS_FILE="$O/results.xml" > "$O/sim.log" 2>&1 || true
+  TESTCASE="${GATE_TESTS:-management,saxpy,matmul,shade,mlp,one_block,raster}" SIM_BUILD="$O/sim" COCOTB_RESULTS_FILE="$O/results.xml" > "$O/sim.log" 2>&1 || true
 tail -n 20 "$O/sim.log"
 # cocotb 失败时 make 照样返回 0，判据是结果文件
 [ -s "$O/results.xml" ] || { echo "没有 results.xml"; exit 1; }
