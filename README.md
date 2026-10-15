@@ -6,7 +6,7 @@ A small parallel-compute chip for the ECOS 2610 shuttle: [tiny-gpu](https://gith
 
 Sixteen threads run the same kernel at once, each finding its own data from its thread number: the computing model of a GPU at its smallest. The same hardware shades an image, one pixel a thread, and runs a small neural network over a batch, one sample a thread. There is no processor on the chip. A host writes the kernel and the data through an SPI port that speaks the protocol of [`spis`](https://github.com/Tape-Out/spis), starts it, waits for the `done` pin and reads the data memory back.
 
-tiny-gpu is taken unmodified through sv2v, as upstream builds it, and four inputs that upstream leaves unconnected on the program memory controller are tied to zero in the converted file (`htest/tieoff.py`). This repository adds the two memories and the management port in `hwsrc/`.
+tiny-gpu is taken unmodified through sv2v, as upstream builds it, and `htest/tieoff.py` ties to zero the four inputs that upstream leaves unconnected on the program memory controller. This repository adds the two memories and the management port in `hwsrc/`.
 
 The board wiring, the register map, the chip tests and the limits are in [`docs/流片说明.md`](docs/流片说明.md); the tape-out report is generated from that file.
 
